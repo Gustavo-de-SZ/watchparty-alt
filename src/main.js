@@ -5,7 +5,9 @@ import {
   leaveRoom,
   getSelfId,
   getPeers,
-  getLocalProfile
+  getLocalProfile,
+  requestHistoryFromPeers,
+  sendHistoryDelta
 } from './webrtc.js';
 import {
   startScreenShare,
@@ -22,6 +24,17 @@ import {
   getAvatarColor,
   ChatManager
 } from './chat.js';
+import {
+  getRoomMessages,
+  getLatestMessageTimestamp
+} from './db.js';
+import {
+  PRESET_AVATARS,
+  getStoredAvatar,
+  saveStoredAvatar,
+  compressImageToDataURL,
+  renderAvatarInto
+} from './avatars.js';
 
 // DOM Elements
 const modalLobby = document.getElementById('modal-lobby');
@@ -31,6 +44,13 @@ const inputEditUsername = document.getElementById('input-edit-username');
 const inputRoomCode = document.getElementById('input-room-code');
 const btnCreateRoom = document.getElementById('btn-create-room');
 const btnJoinRoom = document.getElementById('btn-join-room');
+
+// Avatar DOM elements
+const lobbyAvatarGrid = document.getElementById('lobby-avatar-grid');
+const editAvatarGrid = document.getElementById('edit-avatar-grid');
+const btnUploadAvatarLobby = document.getElementById('btn-upload-avatar-lobby');
+const btnUploadAvatarEdit = document.getElementById('btn-upload-avatar-edit');
+const inputAvatarFile = document.getElementById('input-avatar-file');
 
 // Header elements
 const roomInfoBadge = document.getElementById('room-info-badge');
@@ -94,20 +114,26 @@ const participantsList = document.getElementById('participants-list');
 // Application State
 let currentRoomId = null;
 let currentUsername = getStoredUsername();
+let currentAvatar = getStoredAvatar();
 let activePresenterId = null;
 let chatManager = null;
 const isMobile = isMobileDevice();
 
+// Track which avatar target triggered file upload
+let avatarUploadTarget = 'lobby'; // 'lobby' or 'edit'
+
 // Initialize App
 function initApp() {
   updateUserUI();
+  populateAvatarGrids();
 
-  // Initialize Chat Manager
+  // Initialize Chat Manager with selfId tracking
   chatManager = new ChatManager({
     messagesContainer: chatMessages,
     unreadBadgeElement: chatUnreadBadge,
+    currentSelfId: getSelfId(),
     onNewMessage: () => {
-      // Message received
+      // New message added
     }
   });
 
@@ -134,11 +160,91 @@ function initApp() {
 
 function updateUserUI() {
   userNameDisplay.textContent = currentUsername;
-  userAvatar.textContent = currentUsername.charAt(0).toUpperCase();
-  userAvatar.style.backgroundColor = getAvatarColor(currentUsername);
+  const color = getAvatarColor(currentUsername);
+  renderAvatarInto(userAvatar, currentAvatar, currentUsername, color);
+}
+
+function populateAvatarGrids() {
+  renderAvatarGrid(lobbyAvatarGrid);
+  renderAvatarGrid(editAvatarGrid);
+}
+
+function renderAvatarGrid(container) {
+  if (!container) return;
+  container.innerHTML = '';
+
+  // Render presets
+  PRESET_AVATARS.forEach((preset) => {
+    const el = document.createElement('div');
+    el.className = `avatar-option ${currentAvatar === preset.id ? 'selected' : ''}`;
+    el.dataset.id = preset.id;
+    el.title = preset.name;
+    el.innerHTML = preset.svg;
+
+    el.addEventListener('click', () => {
+      selectAvatar(preset.id);
+    });
+
+    container.appendChild(el);
+  });
+
+  // If current avatar is a custom data URL, render a custom thumbnail slot
+  if (currentAvatar && currentAvatar.startsWith('data:image/')) {
+    const customOption = document.createElement('div');
+    customOption.className = 'avatar-option selected';
+    customOption.dataset.id = 'custom';
+    customOption.title = 'Custom Photo';
+
+    const img = document.createElement('img');
+    img.src = currentAvatar;
+    img.className = 'avatar-custom-img';
+    customOption.appendChild(img);
+
+    container.insertBefore(customOption, container.firstChild);
+  }
+}
+
+function selectAvatar(avatarIdOrDataUrl) {
+  currentAvatar = avatarIdOrDataUrl;
+  saveStoredAvatar(currentAvatar);
+  updateUserUI();
+  populateAvatarGrids();
+
+  // If already in a room, broadcast update to peers
+  if (currentRoomId) {
+    updateProfile({
+      avatar: currentAvatar
+    });
+    updatePeersList();
+  }
 }
 
 function setupEventListeners() {
+  // Avatar Upload Buttons
+  btnUploadAvatarLobby.addEventListener('click', () => {
+    avatarUploadTarget = 'lobby';
+    inputAvatarFile.click();
+  });
+
+  btnUploadAvatarEdit.addEventListener('click', () => {
+    avatarUploadTarget = 'edit';
+    inputAvatarFile.click();
+  });
+
+  inputAvatarFile.addEventListener('change', async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+
+    try {
+      const dataUrl = await compressImageToDataURL(file, 80, 0.8);
+      selectAvatar(dataUrl);
+    } catch (err) {
+      alert(`Could not process avatar photo: ${err.message}`);
+    } finally {
+      inputAvatarFile.value = '';
+    }
+  });
+
   // Lobby Actions
   btnCreateRoom.addEventListener('click', handleCreateRoom);
   btnJoinRoom.addEventListener('click', handleJoinRoom);
@@ -201,7 +307,7 @@ function setupEventListeners() {
 
     const msg = sendChatMessage(text);
     if (msg) {
-      chatManager.addMessage(msg, true);
+      chatManager.addMessage(msg, true, true);
     }
     chatInput.value = '';
     chatInput.focus();
@@ -239,9 +345,9 @@ function handleJoinRoom() {
 }
 
 /**
- * Connect to room via WebRTC
+ * Connect to room via WebRTC with IndexedDB hydration and P2P Catch-Up
  */
-function joinPartyRoom(roomId) {
+async function joinPartyRoom(roomId) {
   currentRoomId = roomId;
   window.location.hash = `room=${roomId}`;
 
@@ -253,17 +359,37 @@ function joinPartyRoom(roomId) {
   btnLeaveRoom.classList.remove('hidden');
   modalLobby.classList.add('hidden');
 
-  // Initialize Room
+  // Step 1: Hydrate Chat from local browser IndexedDB
+  try {
+    const cachedMessages = await getRoomMessages(roomId, 0);
+    if (cachedMessages && cachedMessages.length > 0) {
+      chatManager.loadHistory(cachedMessages, false);
+      chatManager.addSystemMessage(`Restored ${cachedMessages.length} message(s) from local storage`);
+    }
+  } catch (err) {
+    console.warn('Could not load cached messages:', err);
+  }
+
+  // Step 2: Initialize Room
   initRoom({
     roomId,
     profile: {
       name: currentUsername,
       role: 'viewer',
-      color: getAvatarColor(currentUsername)
+      color: getAvatarColor(currentUsername),
+      avatar: currentAvatar
     },
-    onPeerJoin: (peerId, peer) => {
+    onPeerJoin: async (peerId, peer) => {
       chatManager.addSystemMessage(`${peer.name || 'A user'} joined the party`);
       updatePeersList();
+
+      // Ask connected peers for any messages we missed
+      try {
+        const latestTime = await getLatestMessageTimestamp(roomId);
+        requestHistoryFromPeers(latestTime);
+      } catch (e) {
+        console.warn('History catch-up request error:', e);
+      }
     },
     onPeerLeave: (peerId, peer) => {
       const name = peer ? peer.name : 'A user';
@@ -294,7 +420,7 @@ function joinPartyRoom(roomId) {
       updatePeersList();
     },
     onChatMessage: (message) => {
-      chatManager.addMessage(message, false);
+      chatManager.addMessage(message, false, true);
     },
     onProfileUpdate: () => {
       updatePeersList();
@@ -302,12 +428,32 @@ function joinPartyRoom(roomId) {
     onPingUpdate: (peerId, latency) => {
       latencyText.textContent = `${latency} ms`;
     },
+    // Anti-Entropy History Catch-up Handlers
+    onHistoryRequest: async ({ since, roomId: reqRoomId }, peerId) => {
+      if (reqRoomId === currentRoomId) {
+        try {
+          const delta = await getRoomMessages(reqRoomId, since);
+          if (delta && delta.length > 0) {
+            sendHistoryDelta(peerId, delta);
+          }
+        } catch (e) {
+          console.warn('Error serving history delta:', e);
+        }
+      }
+    },
+    onHistoryResponse: (messages) => {
+      if (messages && messages.length > 0) {
+        chatManager.loadHistory(messages, true);
+        chatManager.addSystemMessage(`Synced ${messages.length} message(s) from peers`);
+      }
+    },
     onError: (err) => {
       console.error('Room connection error:', err);
       chatManager.addSystemMessage(`Connection error: ${err.message || 'Relay issue'}`);
     }
   });
 
+  chatManager.setSelfId(getSelfId());
   updatePeersList();
 }
 
@@ -400,7 +546,7 @@ function handleLocalShareStopped() {
 }
 
 /**
- * Update participants list and badges
+ * Update participants list and badges with custom avatars
  */
 function updatePeersList() {
   const peers = getPeers();
@@ -414,6 +560,7 @@ function updatePeersList() {
   const selfItem = createParticipantItem({
     name: currentUsername,
     color: getAvatarColor(currentUsername),
+    avatar: currentAvatar,
     isSelf: true,
     isHost: isCurrentlySharing()
   });
@@ -425,6 +572,7 @@ function updatePeersList() {
     const item = createParticipantItem({
       name: peer.name || 'User',
       color: peer.color || getAvatarColor(peer.name || 'User'),
+      avatar: peer.avatar,
       isSelf: false,
       isHost: isPeerHost,
       latency: peer.latency
@@ -433,23 +581,22 @@ function updatePeersList() {
   });
 }
 
-function createParticipantItem({ name, color, isSelf, isHost, latency }) {
+function createParticipantItem({ name, color, avatar, isSelf, isHost, latency }) {
   const el = document.createElement('div');
   el.className = 'participant-item';
 
   const info = document.createElement('div');
   info.className = 'participant-info';
 
-  const avatar = document.createElement('span');
-  avatar.className = 'chat-avatar';
-  avatar.style.backgroundColor = color;
-  avatar.textContent = name.charAt(0).toUpperCase();
+  const avatarEl = document.createElement('span');
+  avatarEl.className = 'chat-avatar';
+  renderAvatarInto(avatarEl, avatar, name, color);
 
   const nameSpan = document.createElement('span');
   nameSpan.className = 'participant-name';
   nameSpan.textContent = isSelf ? `${name} (You)` : name;
 
-  info.appendChild(avatar);
+  info.appendChild(avatarEl);
   info.appendChild(nameSpan);
 
   const badges = document.createElement('div');
@@ -517,11 +664,12 @@ function handleLeaveRoom() {
 }
 
 /**
- * Edit Name Modal
+ * Edit Name & Profile Modal
  */
 function openEditNameModal() {
   inputEditUsername.value = currentUsername;
   modalEditName.classList.remove('hidden');
+  populateAvatarGrids();
   inputEditUsername.focus();
 }
 
@@ -538,7 +686,8 @@ function handleSaveName(e) {
     updateUserUI();
     updateProfile({
       name: newName,
-      color: getAvatarColor(newName)
+      color: getAvatarColor(newName),
+      avatar: currentAvatar
     });
     updatePeersList();
   }

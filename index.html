@@ -198,6 +198,19 @@
 
           <div class="modal-body">
             <div class="form-group">
+              <label>Select Avatar</label>
+              <div id="lobby-avatar-grid" class="avatar-grid">
+                <!-- Avatars rendered dynamically -->
+              </div>
+              <div class="avatar-upload-row">
+                <button type="button" id="btn-upload-avatar-lobby" class="btn-secondary btn-sm">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                  <span>Upload Custom Photo</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="form-group">
               <label for="input-username">Your Nickname</label>
               <input id="input-username" type="text" placeholder="e.g. Alex" maxlength="20" required />
             </div>
@@ -221,30 +234,47 @@
             </div>
 
             <div class="compatibility-notice">
-              <div class="notice-badge">ℹ️ Compatibility</div>
-              <p>Desktop hosts on Windows, Linux (Wayland & X11) can share screen & audio. Android users can join to watch and chat seamlessly.</p>
+              <div class="notice-badge">ℹ️ Compatibility & Storage</div>
+              <p>IndexedDB saves your chat history across refreshes. Desktop hosts can share screen with audio; Android users can watch and chat.</p>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- Change Name Modal -->
+      <!-- Change Profile Modal -->
       <div id="modal-edit-name" class="modal-backdrop hidden">
-        <div class="modal-card modal-card-small">
+        <div class="modal-card">
           <div class="modal-header">
-            <h3>Change Display Name</h3>
+            <h3>Edit Profile</h3>
+            <p class="modal-subtitle">Update your nickname and avatar</p>
           </div>
           <form id="form-edit-name" class="modal-body">
             <div class="form-group">
+              <label>Avatar</label>
+              <div id="edit-avatar-grid" class="avatar-grid">
+                <!-- Avatars rendered dynamically -->
+              </div>
+              <div class="avatar-upload-row">
+                <button type="button" id="btn-upload-avatar-edit" class="btn-secondary btn-sm">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                  <span>Upload Custom Photo</span>
+                </button>
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="input-edit-username">Display Name</label>
               <input id="input-edit-username" type="text" maxlength="20" required />
             </div>
             <div class="modal-actions">
               <button type="button" id="btn-cancel-edit-name" class="btn-secondary">Cancel</button>
-              <button type="submit" class="btn-primary">Save</button>
+              <button type="submit" class="btn-primary">Save Changes</button>
             </div>
           </form>
         </div>
       </div>
+
+      <!-- Hidden file input for custom avatar upload -->
+      <input type="file" id="input-avatar-file" accept="image/*" class="hidden" />
     </div>
 
     <script type="module" src="./src/main.js"></script>

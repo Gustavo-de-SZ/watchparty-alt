@@ -1,3 +1,6 @@
+import { saveMessage, saveMessages } from './db.js';
+import { renderAvatarInto, getStoredAvatar, saveStoredAvatar } from './avatars.js';
+
 const STORAGE_KEY_NAME = 'watchparty_username';
 
 const AVATAR_COLORS = [
@@ -75,13 +78,13 @@ export function createChatMessageElement(message, isSelf = false) {
 
   const avatar = document.createElement('span');
   avatar.className = 'chat-avatar';
-  avatar.style.backgroundColor = message.senderColor || getAvatarColor(message.senderName || 'Anonymous');
-  avatar.textContent = (message.senderName || '?').charAt(0).toUpperCase();
+  const color = message.senderColor || getAvatarColor(message.senderName || 'Anonymous');
+  renderAvatarInto(avatar, message.senderAvatar, message.senderName, color);
 
   const author = document.createElement('span');
   author.className = 'chat-author';
   author.textContent = isSelf ? `${message.senderName} (You)` : message.senderName;
-  author.style.color = message.senderColor || getAvatarColor(message.senderName || 'Anonymous');
+  author.style.color = color;
 
   const time = document.createElement('span');
   time.className = 'chat-time';
@@ -102,16 +105,22 @@ export function createChatMessageElement(message, isSelf = false) {
 }
 
 /**
- * Chat state manager
+ * Chat state manager with IndexedDB persistence & deduplication
  */
 export class ChatManager {
-  constructor({ messagesContainer, unreadBadgeElement, onNewMessage }) {
+  constructor({ messagesContainer, unreadBadgeElement, onNewMessage, currentSelfId }) {
     this.container = messagesContainer;
     this.badge = unreadBadgeElement;
     this.onNewMessage = onNewMessage;
+    this.currentSelfId = currentSelfId;
     this.unreadCount = 0;
     this.isChatOpen = true;
+    this.seenMessageIds = new Set();
     this.messages = [];
+  }
+
+  setSelfId(selfId) {
+    this.currentSelfId = selfId;
   }
 
   setChatOpen(isOpen) {
@@ -123,11 +132,26 @@ export class ChatManager {
     }
   }
 
-  addMessage(msg, isSelf = false) {
+  /**
+   * Add a single message (and persist to IndexedDB)
+   */
+  async addMessage(msg, isSelf = false, persist = true) {
+    if (!msg || !msg.id) return;
+
+    // Deduplicate
+    if (this.seenMessageIds.has(msg.id)) {
+      return;
+    }
+    this.seenMessageIds.add(msg.id);
     this.messages.push(msg);
 
+    // Save to IndexedDB (asynchronous, non-blocking)
+    if (persist && !msg.isSystem) {
+      saveMessage(msg).catch(err => console.warn('Failed saving msg to IndexedDB:', err));
+    }
+
     if (this.container) {
-      const el = createChatMessageElement(msg, isSelf);
+      const el = createChatMessageElement(msg, isSelf || (msg.senderId && msg.senderId === this.currentSelfId));
       this.container.appendChild(el);
       this.scrollToBottom();
     }
@@ -142,6 +166,36 @@ export class ChatManager {
     }
   }
 
+  /**
+   * Bulk load historical or caught-up messages
+   */
+  async loadHistory(messages, persist = false) {
+    if (!messages || messages.length === 0) return;
+
+    // Filter out already seen
+    const newItems = messages.filter(m => m && m.id && !this.seenMessageIds.has(m.id));
+    if (newItems.length === 0) return;
+
+    // Sort chronologically
+    newItems.sort((a, b) => a.timestamp - b.timestamp);
+
+    for (const msg of newItems) {
+      this.seenMessageIds.add(msg.id);
+      this.messages.push(msg);
+      if (this.container) {
+        const isSelf = Boolean(this.currentSelfId && msg.senderId === this.currentSelfId);
+        const el = createChatMessageElement(msg, isSelf);
+        this.container.appendChild(el);
+      }
+    }
+
+    if (persist) {
+      saveMessages(newItems).catch(err => console.warn('Failed saving history batch:', err));
+    }
+
+    this.scrollToBottom();
+  }
+
   addSystemMessage(text) {
     const sysMsg = {
       id: `sys-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -149,7 +203,7 @@ export class ChatManager {
       timestamp: Date.now(),
       isSystem: true
     };
-    this.addMessage(sysMsg, false);
+    this.addMessage(sysMsg, false, false);
   }
 
   updateBadge() {
@@ -171,6 +225,7 @@ export class ChatManager {
 
   clear() {
     this.messages = [];
+    this.seenMessageIds.clear();
     this.unreadCount = 0;
     this.updateBadge();
     if (this.container) {

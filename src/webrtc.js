@@ -25,16 +25,18 @@ let currentRoom = null;
 let currentRoomId = null;
 let activeStream = null;
 let pingInterval = null;
-const peers = new Map(); // peerId -> { name, role, color, latency }
+const peers = new Map(); // peerId -> { name, role, color, avatar, latency }
 
 let chatAction = null;
 let profileAction = null;
 let streamStateAction = null;
+let historyAction = null;
 
 let localProfile = {
   name: 'Anonymous',
   role: 'viewer', // 'host' or 'viewer'
-  color: '#38bdf8'
+  color: '#38bdf8',
+  avatar: 'avatar-popcorn'
 };
 
 /**
@@ -46,11 +48,12 @@ export function initRoom({
   onPeerJoin,
   onPeerLeave,
   onStream,
-  onStreamEnded,
   onChatMessage,
   onProfileUpdate,
   onPingUpdate,
   onStreamState,
+  onHistoryRequest,
+  onHistoryResponse,
   onError
 }) {
   if (currentRoom) {
@@ -76,6 +79,7 @@ export function initRoom({
     chatAction = currentRoom.makeAction('chat');
     profileAction = currentRoom.makeAction('profile');
     streamStateAction = currentRoom.makeAction('stream-state');
+    historyAction = currentRoom.makeAction('chat-history');
 
     // Handle incoming chat messages
     chatAction.onMessage((data, peerId) => {
@@ -84,6 +88,20 @@ export function initRoom({
           ...data,
           peerId
         });
+      }
+    });
+
+    // Handle P2P Chat History Sync (Anti-Entropy)
+    historyAction.onMessage((data, peerId) => {
+      if (!data) return;
+
+      if (data.type === 'sync-request' && onHistoryRequest) {
+        onHistoryRequest({
+          since: data.since || 0,
+          roomId: data.roomId
+        }, peerId);
+      } else if (data.type === 'sync-response' && onHistoryResponse) {
+        onHistoryResponse(data.messages || [], peerId);
       }
     });
 
@@ -98,7 +116,7 @@ export function initRoom({
       }
     });
 
-    // Handle incoming stream state changes (e.g. host started or stopped sharing)
+    // Handle incoming stream state changes (host started/stopped sharing)
     streamStateAction.onMessage((data, peerId) => {
       if (onStreamState) {
         onStreamState(data, peerId);
@@ -112,6 +130,7 @@ export function initRoom({
         name: `User-${peerId.slice(0, 4)}`,
         role: 'viewer',
         color: '#94a3b8',
+        avatar: 'avatar-popcorn',
         latency: null
       });
 
@@ -174,11 +193,13 @@ export function sendChatMessage(text) {
   if (!chatAction || !text.trim()) return null;
 
   const message = {
-    id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    id: `msg-${Date.now()}-${selfId.slice(0, 5)}-${Math.random().toString(36).slice(2, 6)}`,
+    roomId: currentRoomId,
     text: text.trim(),
     senderId: selfId,
     senderName: localProfile.name,
     senderColor: localProfile.color,
+    senderAvatar: localProfile.avatar,
     timestamp: Date.now()
   };
 
@@ -186,6 +207,32 @@ export function sendChatMessage(text) {
   chatAction.send(message);
 
   return message;
+}
+
+/**
+ * Send a history catch-up request to peers
+ */
+export function requestHistoryFromPeers(sinceTimestamp = 0) {
+  if (!historyAction || !currentRoom) return;
+
+  historyAction.send({
+    type: 'sync-request',
+    roomId: currentRoomId,
+    since: sinceTimestamp
+  });
+}
+
+/**
+ * Send history delta to a specific peer
+ */
+export function sendHistoryDelta(peerId, messages) {
+  if (!historyAction || !currentRoom || !messages) return;
+
+  historyAction.send({
+    type: 'sync-response',
+    roomId: currentRoomId,
+    messages
+  }, peerId);
 }
 
 /**
@@ -288,6 +335,7 @@ export function leaveRoom() {
   chatAction = null;
   profileAction = null;
   streamStateAction = null;
+  historyAction = null;
   peers.clear();
 }
 
