@@ -35,6 +35,16 @@ import {
   compressImageToDataURL,
   renderAvatarInto
 } from './avatars.js';
+import {
+  initTheme,
+  applyPalette,
+  DARK_PALETTES,
+  LIGHT_PALETTES,
+  getCurrentThemeState
+} from './theme.js';
+
+// Initialize Theme immediately on script evaluation
+let themeState = initTheme();
 
 // DOM Elements
 const modalLobby = document.getElementById('modal-lobby');
@@ -51,6 +61,13 @@ const editAvatarGrid = document.getElementById('edit-avatar-grid');
 const btnUploadAvatarLobby = document.getElementById('btn-upload-avatar-lobby');
 const btnUploadAvatarEdit = document.getElementById('btn-upload-avatar-edit');
 const inputAvatarFile = document.getElementById('input-avatar-file');
+
+// Theme DOM elements
+const btnToggleTheme = document.getElementById('btn-toggle-theme');
+const btnModeDark = document.getElementById('btn-mode-dark');
+const btnModeLight = document.getElementById('btn-mode-light');
+const palettePickerGrid = document.getElementById('palette-picker-grid');
+const inputCustomAccent = document.getElementById('input-custom-accent');
 
 // Header elements
 const roomInfoBadge = document.getElementById('room-info-badge');
@@ -259,8 +276,14 @@ function setupEventListeners() {
 
   // Profile Edit
   userChip.addEventListener('click', openEditNameModal);
+  btnToggleTheme.addEventListener('click', openEditNameModal);
   document.getElementById('btn-cancel-edit-name').addEventListener('click', closeEditNameModal);
   document.getElementById('form-edit-name').addEventListener('submit', handleSaveName);
+
+  // Theme & Mood Palettes
+  btnModeDark.addEventListener('click', () => switchThemeMode('dark'));
+  btnModeLight.addEventListener('click', () => switchThemeMode('light'));
+  inputCustomAccent.addEventListener('input', handleCustomAccentChange);
 
   // Screensharing Actions (Desktop Only)
   if (!isMobile) {
@@ -670,11 +693,109 @@ function openEditNameModal() {
   inputEditUsername.value = currentUsername;
   modalEditName.classList.remove('hidden');
   populateAvatarGrids();
+  renderPalettePickerGrid();
   inputEditUsername.focus();
 }
 
 function closeEditNameModal() {
   modalEditName.classList.add('hidden');
+}
+
+function renderPalettePickerGrid() {
+  if (!palettePickerGrid) return;
+  palettePickerGrid.innerHTML = '';
+
+  const palettes = themeState.mode === 'dark' ? DARK_PALETTES : LIGHT_PALETTES;
+
+  palettes.forEach((palette) => {
+    const isSelected = palette.id === themeState.paletteId;
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = `palette-card ${isSelected ? 'selected' : ''}`;
+    card.style.backgroundColor = palette.colors.bgApp;
+    card.style.borderColor = isSelected ? 'var(--border-selected)' : palette.colors.borderCard;
+
+    const info = document.createElement('div');
+    const title = document.createElement('div');
+    title.className = 'palette-title';
+    title.style.color = palette.colors.textMain;
+    title.textContent = palette.name;
+
+    const desc = document.createElement('div');
+    desc.className = 'palette-desc';
+    desc.style.color = palette.colors.textMuted;
+    desc.textContent = palette.description;
+
+    info.appendChild(title);
+    info.appendChild(desc);
+
+    const swatches = document.createElement('div');
+    swatches.className = 'palette-swatches';
+
+    const dot1 = document.createElement('span');
+    dot1.className = 'swatch-dot';
+    dot1.style.backgroundColor = palette.colors.bgTopbar;
+    dot1.style.borderColor = palette.colors.borderSubtle;
+
+    const dot2 = document.createElement('span');
+    dot2.className = 'swatch-dot';
+    dot2.style.backgroundColor = palette.colors.bgCard;
+    dot2.style.borderColor = palette.colors.borderSubtle;
+
+    const dot3 = document.createElement('span');
+    dot3.className = 'swatch-dot';
+    dot3.style.backgroundColor = palette.colors.accentPrimary;
+
+    swatches.appendChild(dot1);
+    swatches.appendChild(dot2);
+    swatches.appendChild(dot3);
+
+    card.appendChild(info);
+    card.appendChild(swatches);
+
+    card.addEventListener('click', () => {
+      themeState.paletteId = palette.id;
+      themeState.customAccent = null;
+      if (inputCustomAccent) {
+        inputCustomAccent.value = palette.colors.accentPrimary;
+      }
+      applyPalette(palette, null);
+      renderPalettePickerGrid();
+    });
+
+    palettePickerGrid.appendChild(card);
+  });
+
+  // Update mode buttons
+  if (btnModeDark && btnModeLight) {
+    btnModeDark.classList.toggle('active', themeState.mode === 'dark');
+    btnModeLight.classList.toggle('active', themeState.mode === 'light');
+  }
+
+  // Update custom accent input color
+  if (inputCustomAccent) {
+    const activePalette = palettes.find(p => p.id === themeState.paletteId) || palettes[0];
+    inputCustomAccent.value = themeState.customAccent || activePalette.colors.accentPrimary;
+  }
+}
+
+function switchThemeMode(mode) {
+  themeState.mode = mode;
+  const palettes = mode === 'dark' ? DARK_PALETTES : LIGHT_PALETTES;
+  const newPalette = palettes[0];
+  themeState.paletteId = newPalette.id;
+  themeState.customAccent = null;
+
+  applyPalette(newPalette, null);
+  renderPalettePickerGrid();
+}
+
+function handleCustomAccentChange(e) {
+  const color = e.target.value;
+  themeState.customAccent = color;
+  const palettes = themeState.mode === 'dark' ? DARK_PALETTES : LIGHT_PALETTES;
+  const activePalette = palettes.find(p => p.id === themeState.paletteId) || palettes[0];
+  applyPalette(activePalette, color);
 }
 
 function handleSaveName(e) {
