@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>WatchParty P2P - Serverless Screen Sharing</title>
+    <meta name="description" content="Serverless peer-to-peer screen sharing and chat watch party. Works on Windows, Linux (Wayland/X11), and Android." />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2338bdf8'><path d='M4 6h16v10H4z'/><path d='M2 4h20v14H2zm8 16h4v2h-4z'/></svg>" />
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <div id="app" class="app-container">
+      <!-- Top Navigation Bar -->
+      <header class="app-header">
+        <div class="header-left">
+          <div class="logo">
+            <svg class="logo-icon" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h5v2h8v-2h5c1.1 0 1.99-.9 1.99-2L23 5c0-1.1-.9-2-2-2zm0 14H3V5h18v12z"/>
+              <path d="M10 8v6l5-3z"/>
+            </svg>
+            <span class="logo-text">WatchParty<span class="logo-badge">P2P</span></span>
+          </div>
+
+          <div id="room-info-badge" class="room-info-badge hidden">
+            <span class="room-tag">ROOM</span>
+            <span id="room-code-display" class="room-code"></span>
+            <button id="btn-copy-link" class="btn-icon" title="Copy Invite Link">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            </button>
+            <span id="copy-toast" class="toast-bubble hidden">Copied!</span>
+          </div>
+        </div>
+
+        <div class="header-right">
+          <!-- Connection / Latency Indicator -->
+          <div id="latency-indicator" class="latency-indicator hidden" title="P2P Latency">
+            <span class="status-dot"></span>
+            <span id="latency-text">-- ms</span>
+          </div>
+
+          <!-- Participants Counter -->
+          <button id="btn-toggle-peers" class="btn-secondary btn-badge hidden" title="Participants">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            <span id="peers-count">1</span>
+          </button>
+
+          <!-- User Profile Chip -->
+          <div id="user-chip" class="user-chip" title="Click to change name">
+            <span id="user-avatar" class="user-avatar">?</span>
+            <span id="user-name-display" class="user-name">Guest</span>
+          </div>
+
+          <!-- Leave Room Button -->
+          <button id="btn-leave-room" class="btn-danger btn-icon-only hidden" title="Leave Party">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- Main Stage & Content Area -->
+      <main class="main-layout">
+        <!-- Theater Stage -->
+        <section class="theater-section">
+          <div id="video-wrapper" class="video-wrapper">
+            <!-- HTML5 Video for Screenshare stream -->
+            <video id="remote-video" autoplay playsinline></video>
+
+            <!-- Waiting / Idle Placeholder -->
+            <div id="video-placeholder" class="video-placeholder">
+              <div class="placeholder-content">
+                <div class="placeholder-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+                    <line x1="8" y1="21" x2="16" y2="21"/>
+                    <line x1="12" y1="17" x2="12" y2="21"/>
+                  </svg>
+                </div>
+                <h3 id="placeholder-title">No Screen is Being Shared</h3>
+                <p id="placeholder-subtitle">Waiting for host to share a window, tab, or screen.</p>
+                <button id="btn-placeholder-share" class="btn-primary desktop-only">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                  Share Your Screen
+                </button>
+                <div id="mobile-viewer-note" class="mobile-note hidden">
+                  <span>📱 Viewer Mode: You will see the shared screen here as soon as the host starts streaming.</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Presenter Status Overlay -->
+            <div id="presenter-tag" class="presenter-tag hidden">
+              <span class="live-pill">LIVE</span>
+              <span id="presenter-name">Host</span>
+            </div>
+
+            <!-- Mobile Audio Autoplay Unlock Banner -->
+            <div id="audio-unlock-overlay" class="audio-unlock-overlay hidden">
+              <button id="btn-unlock-audio" class="btn-unlock-audio">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+                <span>Tap to Unmute Audio</span>
+              </button>
+            </div>
+
+            <!-- Video Player Controls -->
+            <div id="video-controls-bar" class="video-controls-bar hidden">
+              <div class="controls-left">
+                <button id="btn-toggle-mute" class="btn-ctrl" title="Mute/Unmute">
+                  <svg id="icon-volume-high" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+                  <svg id="icon-volume-muted" class="hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+                </button>
+                <input id="volume-slider" type="range" min="0" max="1" step="0.05" value="1" title="Volume" />
+              </div>
+
+              <div class="controls-right">
+                <button id="btn-pip" class="btn-ctrl" title="Picture in Picture">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><rect x="12" y="11" width="8" height="6" rx="1"/></svg>
+                </button>
+                <button id="btn-fit-mode" class="btn-ctrl" title="Fit to Screen">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+                </button>
+                <button id="btn-fullscreen" class="btn-ctrl" title="Toggle Fullscreen">
+                  <svg id="icon-fs-enter" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+                  <svg id="icon-fs-exit" class="hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Bottom Control Bar -->
+          <footer class="bottom-controls">
+            <div class="controls-group">
+              <!-- Share Screen (Desktop Only) -->
+              <button id="btn-share-screen" class="btn-action btn-share desktop-only">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                <span id="btn-share-text">Share Screen</span>
+              </button>
+
+              <!-- Mobile/Desktop Toggle Chat -->
+              <button id="btn-toggle-chat" class="btn-action">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                <span>Chat</span>
+                <span id="chat-unread-badge" class="badge-count hidden">0</span>
+              </button>
+
+              <!-- Copy Invite Link -->
+              <button id="btn-invite" class="btn-action">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+                <span>Invite</span>
+              </button>
+            </div>
+          </footer>
+        </section>
+
+        <!-- Chat & Participants Sidebar -->
+        <aside id="chat-sidebar" class="chat-sidebar">
+          <div class="sidebar-header">
+            <div class="sidebar-tabs">
+              <button id="tab-chat" class="tab-btn active">Chat</button>
+              <button id="tab-participants" class="tab-btn">Peers (<span id="tab-peers-count">1</span>)</button>
+            </div>
+            <button id="btn-close-sidebar" class="btn-icon mobile-only" title="Close">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+
+          <!-- Chat Tab Content -->
+          <div id="panel-chat" class="panel-content active">
+            <div id="chat-messages" class="chat-messages">
+              <!-- Messages inserted dynamically -->
+            </div>
+            <form id="chat-form" class="chat-form">
+              <input id="chat-input" type="text" placeholder="Type a message..." maxlength="500" autocomplete="off" />
+              <button type="submit" class="btn-send" title="Send">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+              </button>
+            </form>
+          </div>
+
+          <!-- Participants Tab Content -->
+          <div id="panel-participants" class="panel-content hidden">
+            <div id="participants-list" class="participants-list">
+              <!-- Participants inserted dynamically -->
+            </div>
+          </div>
+        </aside>
+      </main>
+
+      <!-- Welcome / Lobby Modal -->
+      <div id="modal-lobby" class="modal-backdrop">
+        <div class="modal-card">
+          <div class="modal-header">
+            <div class="modal-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h5v2h8v-2h5c1.1 0 1.99-.9 1.99-2L23 5c0-1.1-.9-2-2-2z"/><path d="M10 8v6l5-3z"/></svg>
+            </div>
+            <h2>Join WatchParty</h2>
+            <p class="modal-subtitle">Serverless P2P Screen Sharing & Chat on GitHub Pages</p>
+          </div>
+
+          <div class="modal-body">
+            <div class="form-group">
+              <label for="input-username">Your Nickname</label>
+              <input id="input-username" type="text" placeholder="e.g. Alex" maxlength="20" required />
+            </div>
+
+            <div class="room-actions">
+              <div class="action-card">
+                <h3>Create a New Room</h3>
+                <p>Start a new watch-party session and invite up to 3 friends.</p>
+                <button id="btn-create-room" class="btn-primary btn-block">Create Party</button>
+              </div>
+
+              <div class="divider"><span>OR</span></div>
+
+              <div class="action-card">
+                <h3>Join Existing Room</h3>
+                <div class="join-input-row">
+                  <input id="input-room-code" type="text" placeholder="Enter Room Code" maxlength="30" />
+                  <button id="btn-join-room" class="btn-secondary">Join</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="compatibility-notice">
+              <div class="notice-badge">ℹ️ Compatibility</div>
+              <p>Desktop hosts on Windows, Linux (Wayland & X11) can share screen & audio. Android users can join to watch and chat seamlessly.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Change Name Modal -->
+      <div id="modal-edit-name" class="modal-backdrop hidden">
+        <div class="modal-card modal-card-small">
+          <div class="modal-header">
+            <h3>Change Display Name</h3>
+          </div>
+          <form id="form-edit-name" class="modal-body">
+            <div class="form-group">
+              <input id="input-edit-username" type="text" maxlength="20" required />
+            </div>
+            <div class="modal-actions">
+              <button type="button" id="btn-cancel-edit-name" class="btn-secondary">Cancel</button>
+              <button type="submit" class="btn-primary">Save</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
