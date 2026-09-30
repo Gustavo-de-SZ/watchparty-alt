@@ -82,17 +82,17 @@ export function initRoom({
     historyAction = currentRoom.makeAction('chat-history');
 
     // Handle incoming chat messages
-    chatAction.onMessage((data, peerId) => {
+    chatAction.onMessage = (data, { peerId } = {}) => {
       if (onChatMessage) {
         onChatMessage({
           ...data,
           peerId
         });
       }
-    });
+    };
 
     // Handle P2P Chat History Sync (Anti-Entropy)
-    historyAction.onMessage((data, peerId) => {
+    historyAction.onMessage = (data, { peerId } = {}) => {
       if (!data) return;
 
       if (data.type === 'sync-request' && onHistoryRequest) {
@@ -103,10 +103,10 @@ export function initRoom({
       } else if (data.type === 'sync-response' && onHistoryResponse) {
         onHistoryResponse(data.messages || [], peerId);
       }
-    });
+    };
 
     // Handle incoming profile announcements
-    profileAction.onMessage((data, peerId) => {
+    profileAction.onMessage = (data, { peerId } = {}) => {
       const existing = peers.get(peerId) || {};
       const updated = { ...existing, ...data, peerId };
       peers.set(peerId, updated);
@@ -114,17 +114,17 @@ export function initRoom({
       if (onProfileUpdate) {
         onProfileUpdate(peerId, updated);
       }
-    });
+    };
 
     // Handle incoming stream state changes (host started/stopped sharing)
-    streamStateAction.onMessage((data, peerId) => {
+    streamStateAction.onMessage = (data, { peerId } = {}) => {
       if (onStreamState) {
         onStreamState(data, peerId);
       }
-    });
+    };
 
     // Handle peer connection
-    currentRoom.onPeerJoin((peerId) => {
+    currentRoom.onPeerJoin = (peerId) => {
       peers.set(peerId, {
         peerId,
         name: `User-${peerId.slice(0, 4)}`,
@@ -135,34 +135,34 @@ export function initRoom({
       });
 
       // Send local profile to new peer
-      profileAction.send(localProfile, peerId);
+      profileAction.send(localProfile, { target: peerId });
 
       // If we are currently sharing a stream, notify the new peer
       if (activeStream) {
-        streamStateAction.send({ isSharing: true, hostId: selfId }, peerId);
+        streamStateAction.send({ isSharing: true, hostId: selfId }, { target: peerId });
       }
 
       if (onPeerJoin) {
         onPeerJoin(peerId, peers.get(peerId));
       }
-    });
+    };
 
     // Handle peer disconnect
-    currentRoom.onPeerLeave((peerId) => {
+    currentRoom.onPeerLeave = (peerId) => {
       const peer = peers.get(peerId);
       peers.delete(peerId);
 
       if (onPeerLeave) {
         onPeerLeave(peerId, peer);
       }
-    });
+    };
 
     // Handle incoming media stream (screenshare)
-    currentRoom.onPeerStream((stream, peerId, metadata) => {
+    currentRoom.onPeerStream = (stream, peerId, metadata) => {
       if (onStream) {
         onStream(stream, peerId, metadata);
       }
-    });
+    };
 
     // Start periodic ping measurement
     startPingMonitor((peerId, latency) => {
@@ -232,7 +232,7 @@ export function sendHistoryDelta(peerId, messages) {
     type: 'sync-response',
     roomId: currentRoomId,
     messages
-  }, peerId);
+  }, { target: peerId });
 }
 
 /**
